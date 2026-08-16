@@ -8,6 +8,7 @@ reuse regardless of how the data is presented.
 """
 
 import fastf1
+import pandas as pd
 from fastf1.ergast import Ergast
 
 _ergast = Ergast()
@@ -168,6 +169,103 @@ def get_driver_lap_telemetry(year: int, round_num: int, driver_code: str) -> dic
         "speed": telemetry["Speed"].tolist(),
         "throttle": telemetry["Throttle"].tolist(),
         "brake": telemetry["Brake"].tolist(),
+    }
+
+
+def get_race_replay_data(year: int, round_num: int) -> dict:
+    """
+    Fetch and prepare everything needed for an animated race replay:
+    per-driver position traces over time, lap/position history for a
+    leaderboard, and weather samples over the race.
+    """
+    try:
+        session = fastf1.get_session(year, round_num, "R")
+        session.load(telemetry=True, weather=True)
+    except Exception as e:
+        raise F1DataError(f"Could not load race {year} round {round_num}: {e}") from e
+
+    if not session.drivers:
+        raise F1DataError(f"No driver data available for {year} round {round_num}.")
+
+    driver_tracks = {}
+    colors = {}
+    all_x, all_y = [], []
+
+    for drv in session.drivers:
+        try:
+            info = session.get_driver(drv)
+            code = info["Abbreviation"]
+            team_color = info.get("TeamColor")
+            colors[code] = f"#{team_color}" if team_color else "#FFFFFF"
+
+            pos = session.pos_data[drv]
+        except Exception:
+            continue
+
+        if pos is None or pos.empty:
+            continue
+
+        times = pos["Time"].dt.total_seconds().tolist()
+        xs = pos["X"].tolist()
+        ys = pos["Y"].tolist()
+
+        driver_tracks[code] = {"t": times, "x": xs, "y": ys}
+        all_x.extend(xs)
+        all_y.extend(ys)
+
+    if not driver_tracks:
+        raise F1DataError(f"No position telemetry available for {year} round {round_num}.")
+
+    driver_laps_info = {}
+    for drv in session.drivers:
+        try:
+            info = session.get_driver(drv)
+            code = info["Abbreviation"]
+        except Exception:
+            continue
+
+        laps = session.laps.pick_driver(drv)
+        entries = []
+        for _, lap in laps.iterrows():
+            start = lap.get("LapStartTime")
+            if start is None or pd.isna(start):
+                continue
+            pos_val = lap.get("Position")
+            entries.append({
+                "lap_number": int(lap["LapNumber"]) if not pd.isna(lap["LapNumber"]) else None,
+                "start_time": start.total_seconds(),
+                "position": int(pos_val) if pos_val == pos_val else None,
+            })
+        driver_laps_info[code] = entries
+
+    weather = []
+    if session.weather_data is not None and not session.weather_data.empty:
+        for _, row in session.weather_data.iterrows():
+            weather.append({
+                "t": row["Time"].total_seconds(),
+                "track_temp": float(row["TrackTemp"]),
+                "air_temp": float(row["AirTemp"]),
+                "humidity": float(row["Humidity"]),
+                "wind_speed": float(row["WindSpeed"]),
+                "rainfall": bool(row["Rainfall"]),
+            })
+
+    total_laps = max(
+        (e["lap_number"] for entries in driver_laps_info.values() for e in entries if e["lap_number"]),
+        default=0,
+    )
+    max_time = max(max(t["t"]) for t in driver_tracks.values() if t["t"])
+
+    return {
+        "event_name": session.event["EventName"],
+        "driver_tracks": driver_tracks,
+        "driver_laps_info": driver_laps_info,
+        "colors": colors,
+        "x_range": (min(all_x), max(all_x)),
+        "y_range": (min(all_y), max(all_y)),
+        "weather": weather,
+        "total_laps": total_laps,
+        "max_time": max_time,
     }
 
 
