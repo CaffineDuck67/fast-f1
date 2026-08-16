@@ -318,3 +318,4 @@ def compare_seasons(year1: int, year2: int) -> dict:
         "year2": year2,
         "data": data,
         "errors": errors,
+    }
