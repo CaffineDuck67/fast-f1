@@ -4,93 +4,137 @@ import argparse
 import sys
 
 import fastf1
-from fastf1.ergast import Ergast
+
+import display
+import export
+from f1_data import (
+    F1DataError,
+    get_schedule,
+    get_race_winners,
+    get_driver_standings,
+    get_constructor_standings,
+    get_race_results,
+    compare_seasons,
+)
 
 fastf1.Cache.enable_cache("f1_cache")
 
 
-def cmd_winners(year: int):
-    """List every race winner for a given season."""
-    ergast = Ergast()
-    schedule = fastf1.get_event_schedule(year, include_testing=False)
-
-    print(f"\n{year} Race Winners\n{'-' * 40}")
-    for _, event in schedule.iterrows():
-        round_num = event["RoundNumber"]
-        gp_name = event["EventName"]
-        try:
-            results = ergast.get_race_results(season=year, round=round_num).content[0]
-            winner = results.iloc[0]
-            print(f"Round {round_num:>2} | {gp_name:<30} | {winner['givenName']} {winner['familyName']} ({winner['constructorName']})")
-        except Exception:
-            print(f"Round {round_num:>2} | {gp_name:<30} | (no data / not yet run)")
+def _handle_export(data, args, label: str):
+    """Shared export handling for --csv / --json flags."""
+    try:
+        if getattr(args, "csv", None):
+            export.export_to_csv(data, args.csv)
+            display.print_success(f"Exported {label} to '{args.csv}'")
+        if getattr(args, "json", None):
+            export.export_to_json(data, args.json)
+            display.print_success(f"Exported {label} to '{args.json}'")
+    except export.ExportError as e:
+        display.print_error(str(e))
 
 
-def cmd_standings(year: int):
-    """Print final driver championship standings for a season."""
-    ergast = Ergast()
-    standings = ergast.get_driver_standings(season=year).content[0]
-
-    print(f"\n{year} Driver Championship Standings\n{'-' * 50}")
-    for _, row in standings.iterrows():
-        print(f"{row['position']:>2}. {row['givenName']} {row['familyName']:<20} "
-              f"{row['points']:>6} pts  ({row['constructorNames'][0]})")
+def cmd_winners(args):
+    winners = get_race_winners(args.year)
+    display.print_winners(args.year, winners)
+    _handle_export(winners, args, "race winners")
 
 
-def cmd_race(year: int, round_num: int):
-    """Print full race results for a specific round."""
-    session = fastf1.get_session(year, round_num, "R")
-    session.load(telemetry=False, weather=False)
-
-    print(f"\n{year} Round {round_num} — {session.event['EventName']} Results\n{'-' * 60}")
-    results = session.results[["Position", "Abbreviation", "FullName", "TeamName", "Points", "Status"]]
-    for _, row in results.iterrows():
-        pos = row["Position"]
-        pos_str = f"{int(pos)}" if pos == pos else "DNF"
-        print(f"{pos_str:>3} | {row['Abbreviation']} | {row['FullName']:<20} | {row['TeamName']:<20} | {row['Points']:>4} pts | {row['Status']}")
+def cmd_standings(args):
+    standings = get_driver_standings(args.year)
+    display.print_driver_standings(args.year, standings)
+    _handle_export(standings, args, "driver standings")
 
 
-def cmd_schedule(year: int):
-    """Print the full race calendar for a season."""
-    schedule = fastf1.get_event_schedule(year, include_testing=False)
-
-    print(f"\n{year} Season Schedule\n{'-' * 50}")
-    for _, event in schedule.iterrows():
-        print(f"Round {event['RoundNumber']:>2} | {event['EventDate'].date()} | {event['EventName']} — {event['Location']}, {event['Country']}")
+def cmd_constructors(args):
+    standings = get_constructor_standings(args.year)
+    display.print_constructor_standings(args.year, standings)
+    _handle_export(standings, args, "constructor standings")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="F1 season data CLI (powered by FastF1 + Ergast)")
+def cmd_race(args):
+    race = get_race_results(args.year, args.round)
+    display.print_race_results(args.year, args.round, race["event_name"], race["results"])
+    _handle_export(race["results"], args, "race results")
+
+
+def cmd_schedule(args):
+    schedule = get_schedule(args.year)
+    display.print_schedule(args.year, schedule)
+    _handle_export(schedule, args, "schedule")
+
+
+def cmd_compare(args):
+    comparison = compare_seasons(args.year1, args.year2)
+    display.print_comparison(comparison)
+
+    # Flatten for export: one row per year's summary
+    export_rows = []
+    for year, season in comparison["data"].items():
+        row = {"year": year, **season["summary"]}
+        export_rows.append(row)
+    _handle_export(export_rows, args, "season comparison")
+
+
+def _add_export_flags(parser):
+    parser.add_argument("--csv", metavar="PATH", help="Export result to a CSV file")
+    parser.add_argument("--json", metavar="PATH", help="Export result to a JSON file")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="F1 season data CLI — powered by FastF1 + Ergast",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_winners = sub.add_parser("winners", help="List all race winners for a season")
     p_winners.add_argument("year", type=int)
+    _add_export_flags(p_winners)
+    p_winners.set_defaults(func=cmd_winners)
 
-    p_standings = sub.add_parser("standings", help="Show final driver standings for a season")
+    p_standings = sub.add_parser("standings", help="Show driver championship standings")
     p_standings.add_argument("year", type=int)
+    _add_export_flags(p_standings)
+    p_standings.set_defaults(func=cmd_standings)
+
+    p_constructors = sub.add_parser("constructors", help="Show constructor championship standings")
+    p_constructors.add_argument("year", type=int)
+    _add_export_flags(p_constructors)
+    p_constructors.set_defaults(func=cmd_constructors)
 
     p_race = sub.add_parser("race", help="Show full results for a specific race")
     p_race.add_argument("year", type=int)
     p_race.add_argument("round", type=int)
+    _add_export_flags(p_race)
+    p_race.set_defaults(func=cmd_race)
 
     p_schedule = sub.add_parser("schedule", help="Show the full calendar for a season")
     p_schedule.add_argument("year", type=int)
+    _add_export_flags(p_schedule)
+    p_schedule.set_defaults(func=cmd_schedule)
 
+    p_compare = sub.add_parser("compare", help="Compare two seasons side by side")
+    p_compare.add_argument("year1", type=int)
+    p_compare.add_argument("year2", type=int)
+    _add_export_flags(p_compare)
+    p_compare.set_defaults(func=cmd_compare)
+
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
-    if args.command == "winners":
-        cmd_winners(args.year)
-    elif args.command == "standings":
-        cmd_standings(args.year)
-    elif args.command == "race":
-        cmd_race(args.year, args.round)
-    elif args.command == "schedule":
-        cmd_schedule(args.year)
+    try:
+        args.func(args)
+    except F1DataError as e:
+        display.print_error(str(e))
+        sys.exit(1)
+    except Exception as e:
+        display.print_error(f"Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    main()
