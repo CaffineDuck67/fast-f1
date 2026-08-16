@@ -14,6 +14,7 @@ f1_data.py    Data-access layer: all FastF1 / Ergast fetching
 display.py    Terminal presentation (rich tables, panels, colors)
 export.py     CSV / JSON export utilities
 visualize.py  Matplotlib plotting (speed comparison charts)
+replay.py     Pygame animated race replay (track map, leaderboard, weather)
 ```
 
 Data fetching, presentation, and export are kept in separate modules
@@ -80,6 +81,29 @@ Plots speed-vs-distance for each driver's fastest lap in a race and
 saves it as a PNG (default: `speed_comparison.png`). Pass any number
 of driver codes to compare more than two at once.
 
+### Race replay (animated track map)
+```bash
+python main.py replay 2023 5
+python main.py replay 2023 9 --speed 4
+```
+Opens an interactive window animating the full race on a track map:
+cars move in real time (or sped up), with a live leaderboard, weather
+panel, and lap/time counter — similar to a race engineer's replay
+tool.
+
+**Controls (in the replay window):**
+| Key | Action |
+|---|---|
+| `SPACE` | Pause / resume |
+| `←` / `→` | Rewind / fast-forward 5s |
+| `↑` / `↓` | Increase / decrease playback speed |
+| `R` | Restart from the beginning |
+| `ESC` | Close the window |
+
+Position data for a full race is a larger download than the other
+commands, so the first load can take a minute — it's cached
+afterward like everything else.
+
 ## Exporting data
 
 Every command above supports `--csv` and `--json` flags to save the
@@ -112,6 +136,7 @@ The CLI handles gracefully:
 - [x] Compare two seasons side by side
 - [x] Colorized terminal output (rich)
 - [x] Fastest-lap speed comparison plot
+- [x] Animated race replay with leaderboard and weather
 - [ ] Pit stop data per race
 - [ ] Driver-vs-driver season comparison
 - [ ] Interactive mode / TUI
