@@ -1,4 +1,3 @@
-
 # fast-f1
 
 A command-line tool to fetch and analyze Formula 1 season data — race
@@ -14,6 +13,7 @@ main.py       CLI entry point (argparse only — no data or display logic)
 f1_data.py    Data-access layer: all FastF1 / Ergast fetching
 display.py    Terminal presentation (rich tables, panels, colors)
 export.py     CSV / JSON export utilities
+visualize.py  Matplotlib plotting (speed comparison charts)
 ```
 
 Data fetching, presentation, and export are kept in separate modules
@@ -71,6 +71,15 @@ Side-by-side table of key stats between two seasons: races held,
 champion (driver & constructor), champion points, and win counts —
 with the year-over-year change highlighted in green/red.
 
+### Visualize fastest lap speed
+```bash
+python main.py visualize 2023 5 VER LEC
+python main.py visualize 2023 5 VER LEC HAM --output miami_speed.png
+```
+Plots speed-vs-distance for each driver's fastest lap in a race and
+saves it as a PNG (default: `speed_comparison.png`). Pass any number
+of driver codes to compare more than two at once.
+
 ## Exporting data
 
 Every command above supports `--csv` and `--json` flags to save the
@@ -102,7 +111,8 @@ The CLI handles gracefully:
 - [x] CSV/JSON export flags
 - [x] Compare two seasons side by side
 - [x] Colorized terminal output (rich)
-- [ ] Fastest lap + pit stop data per race
+- [x] Fastest-lap speed comparison plot
+- [ ] Pit stop data per race
 - [ ] Driver-vs-driver season comparison
 - [ ] Interactive mode / TUI
 

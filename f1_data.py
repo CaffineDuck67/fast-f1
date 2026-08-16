@@ -1,4 +1,11 @@
+"""
+f1_data.py — data-access layer.
 
+Every function here talks to FastF1 / Ergast and returns plain Python
+data structures (lists of dicts). No printing, no formatting, no
+export logic lives here — that keeps this module easy to test and
+reuse regardless of how the data is presented.
+"""
 
 import fastf1
 from fastf1.ergast import Ergast
@@ -132,6 +139,35 @@ def get_race_results(year: int, round_num: int) -> dict:
     return {
         "event_name": session.event["EventName"],
         "results": results,
+    }
+
+
+def get_driver_lap_telemetry(year: int, round_num: int, driver_code: str) -> dict:
+    """Return fastest-lap telemetry (distance, speed, throttle, brake) for one driver."""
+    try:
+        session = fastf1.get_session(year, round_num, "R")
+        session.load(telemetry=True, weather=False)
+    except Exception as e:
+        raise F1DataError(f"Could not load race {year} round {round_num}: {e}") from e
+
+    driver_laps = session.laps.pick_driver(driver_code)
+    if driver_laps.empty:
+        raise F1DataError(f"No laps found for driver '{driver_code}' in {year} round {round_num}.")
+
+    fastest_lap = driver_laps.pick_fastest()
+    if fastest_lap is None or fastest_lap.empty:
+        raise F1DataError(f"No fastest lap found for driver '{driver_code}' in {year} round {round_num}.")
+
+    telemetry = fastest_lap.get_car_data().add_distance()
+
+    return {
+        "driver_code": driver_code,
+        "lap_time": str(fastest_lap["LapTime"]),
+        "event_name": session.event["EventName"],
+        "distance": telemetry["Distance"].tolist(),
+        "speed": telemetry["Speed"].tolist(),
+        "throttle": telemetry["Throttle"].tolist(),
+        "brake": telemetry["Brake"].tolist(),
     }
 
 

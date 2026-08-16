@@ -1,4 +1,24 @@
+"""
+main.py — F1 CLI entry point.
 
+Commands:
+    winners <year>                      List every race winner for a season
+    standings <year>                    Driver championship standings
+    constructors <year>                 Constructor championship standings
+    race <year> <round>                 Full results for a specific race
+    schedule <year>                     Full season calendar
+    compare <year1> <year2>             Side-by-side comparison of two seasons
+    visualize <year> <round> <drivers>  Plot fastest-lap speed comparison
+
+Any of the above accept:
+    --csv <path>    export result as CSV
+    --json <path>   export result as JSON
+
+Example:
+    python main.py standings 2023 --csv standings.csv
+    python main.py race 2023 5 --json race5.json
+    python main.py compare 2022 2023
+"""
 
 import argparse
 import sys
@@ -7,6 +27,7 @@ import fastf1
 
 import display
 import export
+import visualize
 from f1_data import (
     F1DataError,
     get_schedule,
@@ -14,6 +35,7 @@ from f1_data import (
     get_driver_standings,
     get_constructor_standings,
     get_race_results,
+    get_driver_lap_telemetry,
     compare_seasons,
 )
 
@@ -75,6 +97,29 @@ def cmd_compare(args):
     _handle_export(export_rows, args, "season comparison")
 
 
+def cmd_visualize(args):
+    telemetry_list = []
+    for driver_code in args.drivers:
+        telemetry_list.append(
+            get_driver_lap_telemetry(args.year, args.round, driver_code.upper())
+        )
+
+    event_name = telemetry_list[0]["event_name"]
+
+    try:
+        visualize.plot_speed_comparison(
+            args.year, args.round, event_name, telemetry_list, args.output
+        )
+    except visualize.VisualizeError as e:
+        display.print_error(str(e))
+        return
+
+    display.print_success(f"Saved speed comparison plot to '{args.output}'")
+    for tel in telemetry_list:
+        console_line = f"  {tel['driver_code']}: fastest lap {tel['lap_time']}"
+        display.console.print(console_line)
+
+
 def _add_export_flags(parser):
     parser.add_argument("--csv", metavar="PATH", help="Export result to a CSV file")
     parser.add_argument("--json", metavar="PATH", help="Export result to a JSON file")
@@ -118,6 +163,18 @@ def build_parser():
     p_compare.add_argument("year2", type=int)
     _add_export_flags(p_compare)
     p_compare.set_defaults(func=cmd_compare)
+
+    p_visualize = sub.add_parser(
+        "visualize", help="Plot fastest-lap speed comparison for two or more drivers"
+    )
+    p_visualize.add_argument("year", type=int)
+    p_visualize.add_argument("round", type=int)
+    p_visualize.add_argument("drivers", nargs="+", help="Driver codes, e.g. VER LEC HAM")
+    p_visualize.add_argument(
+        "--output", "-o", default="speed_comparison.png", metavar="PATH",
+        help="Output image path (default: speed_comparison.png)",
+    )
+    p_visualize.set_defaults(func=cmd_visualize)
 
     return parser
 
