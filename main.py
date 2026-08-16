@@ -9,6 +9,7 @@ Commands:
     schedule <year>                     Full season calendar
     compare <year1> <year2>             Side-by-side comparison of two seasons
     visualize <year> <round> <drivers>  Plot fastest-lap speed comparison
+    replay <year> <round>               Animated race replay with leaderboard
 
 Any of the above accept:
     --csv <path>    export result as CSV
@@ -28,6 +29,7 @@ import fastf1
 import display
 import export
 import visualize
+import replay
 from f1_data import (
     F1DataError,
     get_schedule,
@@ -36,6 +38,7 @@ from f1_data import (
     get_constructor_standings,
     get_race_results,
     get_driver_lap_telemetry,
+    get_race_replay_data,
     compare_seasons,
 )
 
@@ -120,6 +123,13 @@ def cmd_visualize(args):
         display.console.print(console_line)
 
 
+def cmd_replay(args):
+    display.console.print(f"[dim]Loading position data for {args.year} round {args.round}... this can take a minute.[/dim]")
+    data = get_race_replay_data(args.year, args.round)
+    display.print_success(f"Loaded {data['event_name']} — launching replay window (close it or press ESC to exit)")
+    replay.run_replay(data, initial_speed=args.speed)
+
+
 def _add_export_flags(parser):
     parser.add_argument("--csv", metavar="PATH", help="Export result to a CSV file")
     parser.add_argument("--json", metavar="PATH", help="Export result to a JSON file")
@@ -175,6 +185,17 @@ def build_parser():
         help="Output image path (default: speed_comparison.png)",
     )
     p_visualize.set_defaults(func=cmd_visualize)
+
+    p_replay = sub.add_parser(
+        "replay", help="Launch an animated race replay with live leaderboard and weather"
+    )
+    p_replay.add_argument("year", type=int)
+    p_replay.add_argument("round", type=int)
+    p_replay.add_argument(
+        "--speed", type=float, default=1.0,
+        help="Initial playback speed multiplier (default: 1.0)",
+    )
+    p_replay.set_defaults(func=cmd_replay)
 
     return parser
 
