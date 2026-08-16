@@ -151,7 +151,7 @@ def get_driver_lap_telemetry(year: int, round_num: int, driver_code: str) -> dic
     except Exception as e:
         raise F1DataError(f"Could not load race {year} round {round_num}: {e}") from e
 
-    driver_laps = session.laps.pick_driver(driver_code)
+    driver_laps = session.laps.pick_drivers(driver_code)
     if driver_laps.empty:
         raise F1DataError(f"No laps found for driver '{driver_code}' in {year} round {round_num}.")
 
@@ -224,7 +224,7 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         except Exception:
             continue
 
-        laps = session.laps.pick_driver(drv)
+        laps = session.laps.pick_drivers(drv)
         entries = []
         for _, lap in laps.iterrows():
             start = lap.get("LapStartTime")
@@ -239,16 +239,21 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         driver_laps_info[code] = entries
 
     weather = []
-    if session.weather_data is not None and not session.weather_data.empty:
-        for _, row in session.weather_data.iterrows():
-            weather.append({
-                "t": row["Time"].total_seconds(),
-                "track_temp": float(row["TrackTemp"]),
-                "air_temp": float(row["AirTemp"]),
-                "humidity": float(row["Humidity"]),
-                "wind_speed": float(row["WindSpeed"]),
-                "rainfall": bool(row["Rainfall"]),
-            })
+    try:
+        if session.weather_data is not None and not session.weather_data.empty:
+            for _, row in session.weather_data.iterrows():
+                weather.append({
+                    "t": row["Time"].total_seconds(),
+                    "track_temp": float(row["TrackTemp"]),
+                    "air_temp": float(row["AirTemp"]),
+                    "humidity": float(row["Humidity"]),
+                    "wind_speed": float(row["WindSpeed"]),
+                    "rainfall": bool(row["Rainfall"]),
+                })
+    except Exception:
+        # Weather data isn't always available for every session; the
+        # replay can still run without it (weather panel just won't show).
+        weather = []
 
     total_laps = max(
         (e["lap_number"] for entries in driver_laps_info.values() for e in entries if e["lap_number"]),
@@ -313,4 +318,3 @@ def compare_seasons(year1: int, year2: int) -> dict:
         "year2": year2,
         "data": data,
         "errors": errors,
-    }
