@@ -1,0 +1,5 @@
+fastf1
+numpy
+matplotlip
+fastf1
+rich
