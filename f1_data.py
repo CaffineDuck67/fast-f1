@@ -216,6 +216,46 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
     if not driver_tracks:
         raise F1DataError(f"No position telemetry available for {year} round {round_num}.")
 
+    # Build a clean track outline from a single "normal" lap (no pit
+    # entry/exit) rather than a driver's full-session trace, which
+    # would otherwise draw a stray loop through the pit lane every
+    # time that driver pitted.
+    outline_x, outline_y = [], []
+    for drv in session.drivers:
+        try:
+            laps = session.laps.pick_drivers(drv)
+            clean_laps = laps[laps["PitOutTime"].isna() & laps["PitInTime"].isna()]
+            if clean_laps.empty:
+                continue
+            reference_lap = clean_laps.iloc[len(clean_laps) // 2]
+            outline_pos = reference_lap.get_pos_data()
+            if outline_pos is None or outline_pos.empty:
+                continue
+            outline_x = outline_pos["X"].tolist()
+            outline_y = outline_pos["Y"].tolist()
+            break
+        except Exception:
+            continue
+
+    if not outline_x:
+        # Fallback: any driver's full trace is better than no outline at all.
+        first_track = next(iter(driver_tracks.values()))
+        outline_x, outline_y = first_track["x"], first_track["y"]
+
+    # Grid (starting) positions, used as a fallback until each driver
+    # completes their first lap.
+    grid_positions = {}
+    try:
+        for _, row in session.results.iterrows():
+            code = row["Abbreviation"]
+            gp = row.get("GridPosition")
+            grid_positions[code] = int(gp) if gp == gp else None
+    except Exception:
+        grid_positions = {}
+
+    # Lap boundaries, keyed off 'Time' (session time when the lap was
+    # completed) rather than 'LapStartTime' — the latter is frequently
+    # missing/NaT in practice and left every lap unusable.
     driver_laps_info = {}
     for drv in session.drivers:
         try:
@@ -224,16 +264,17 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         except Exception:
             continue
 
-        laps = session.laps.pick_drivers(drv)
+        laps = session.laps.pick_drivers(drv).sort_values("LapNumber")
         entries = []
         for _, lap in laps.iterrows():
-            start = lap.get("LapStartTime")
-            if start is None or pd.isna(start):
+            lap_num = lap.get("LapNumber")
+            end_time = lap.get("Time")
+            if lap_num is None or pd.isna(lap_num) or end_time is None or pd.isna(end_time):
                 continue
             pos_val = lap.get("Position")
             entries.append({
-                "lap_number": int(lap["LapNumber"]) if not pd.isna(lap["LapNumber"]) else None,
-                "start_time": start.total_seconds(),
+                "lap_number": int(lap_num),
+                "end_time": end_time.total_seconds(),
                 "position": int(pos_val) if pos_val == pos_val else None,
             })
         driver_laps_info[code] = entries
@@ -256,7 +297,7 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         weather = []
 
     total_laps = max(
-        (e["lap_number"] for entries in driver_laps_info.values() for e in entries if e["lap_number"]),
+        (e["lap_number"] for entries in driver_laps_info.values() for e in entries),
         default=0,
     )
     max_time = max(max(t["t"]) for t in driver_tracks.values() if t["t"])
@@ -264,7 +305,9 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
     return {
         "event_name": session.event["EventName"],
         "driver_tracks": driver_tracks,
+        "track_outline": {"x": outline_x, "y": outline_y},
         "driver_laps_info": driver_laps_info,
+        "grid_positions": grid_positions,
         "colors": colors,
         "x_range": (min(all_x), max(all_x)),
         "y_range": (min(all_y), max(all_y)),

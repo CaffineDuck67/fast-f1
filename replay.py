@@ -74,15 +74,20 @@ class RaceReplay:
 
     def _current_lap_and_position(self, code: str, t: float):
         entries = self.data["driver_laps_info"].get(code, [])
-        lap_number = 0
-        position = None
-        for e in entries:
-            if e["start_time"] <= t:
-                lap_number = e["lap_number"]
-                if e["position"] is not None:
-                    position = e["position"]
-            else:
-                break
+        completed = [e for e in entries if e["end_time"] <= t]
+
+        if completed:
+            last = completed[-1]
+            total_laps = self.data["total_laps"] or last["lap_number"]
+            lap_number = min(last["lap_number"] + 1, total_laps)
+            position = last["position"]
+        else:
+            lap_number = 1
+            position = None
+
+        if position is None:
+            position = self.data.get("grid_positions", {}).get(code)
+
         return lap_number, position
 
     def _current_weather(self, t: float):
@@ -169,12 +174,12 @@ class RaceReplay:
         self._draw_controls()
 
     def _draw_track(self):
-        # Any one driver's full position trace outlines the circuit.
-        for track in self.data["driver_tracks"].values():
-            points = [self._project(x, y) for x, y in zip(track["x"], track["y"])]
-            if len(points) > 1:
-                pygame.draw.lines(self.screen, TRACK_COLOR, False, points, 4)
-            break
+        outline = self.data.get("track_outline")
+        if not outline or not outline.get("x"):
+            return
+        points = [self._project(x, y) for x, y in zip(outline["x"], outline["y"])]
+        if len(points) > 1:
+            pygame.draw.lines(self.screen, TRACK_COLOR, False, points, 4)
 
     def _draw_cars(self):
         for code, _ in self.data["driver_tracks"].items():
