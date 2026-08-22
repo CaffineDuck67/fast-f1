@@ -7,15 +7,24 @@ export logic lives here — that keeps this module easy to test and
 reuse regardless of how the data is presented.
 """
 
+import logging
+
 import fastf1
 import pandas as pd
 from fastf1.ergast import Ergast
+
+logger = logging.getLogger(__name__)
 
 _ergast = Ergast()
 
 
 class F1DataError(Exception):
     """Raised when requested F1 data can't be retrieved or doesn't exist."""
+
+
+def _is_na(value) -> bool:
+    """Single, consistent NaN/None check used everywhere in this module."""
+    return value is None or pd.isna(value)
 
 
 def get_schedule(year: int) -> list[dict]:
@@ -44,7 +53,6 @@ def get_race_winners(year: int) -> list[dict]:
     """Return the winner of every race in a season."""
     schedule = get_schedule(year)
     winners = []
-
     for event in schedule:
         round_num = event["round"]
         try:
@@ -58,14 +66,17 @@ def get_race_winners(year: int) -> list[dict]:
                 "driver": f"{winner['givenName']} {winner['familyName']}",
                 "constructor": winner["constructorName"],
             })
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "Could not fetch winner for %s round %s (%s): %s",
+                year, round_num, event["event_name"], e,
+            )
             winners.append({
                 "round": round_num,
                 "event_name": event["event_name"],
                 "driver": None,
                 "constructor": None,
             })
-
     return winners
 
 
@@ -129,7 +140,7 @@ def get_race_results(year: int, round_num: int) -> dict:
     for _, row in session.results.iterrows():
         pos = row["Position"]
         results.append({
-            "position": int(pos) if pos == pos else None,  # NaN check
+            "position": None if _is_na(pos) else int(pos),
             "driver_code": row["Abbreviation"],
             "driver": row["FullName"],
             "team": row["TeamName"],
@@ -144,32 +155,48 @@ def get_race_results(year: int, round_num: int) -> dict:
 
 
 def get_driver_lap_telemetry(year: int, round_num: int, driver_code: str) -> dict:
-    """Return fastest-lap telemetry (distance, speed, throttle, brake) for one driver."""
+    """Return fastest-lap telemetry (distance, speed, throttle, brake) for one driver.
+
+    For more than one driver in the same race, prefer
+    `get_multiple_drivers_lap_telemetry` — it loads the session once
+    instead of once per driver.
+    """
+    return get_multiple_drivers_lap_telemetry(year, round_num, [driver_code])[0]
+
+
+def get_multiple_drivers_lap_telemetry(
+    year: int, round_num: int, driver_codes: list[str]
+) -> list[dict]:
+    """Return fastest-lap telemetry for one or more drivers, loading the
+    session only once regardless of how many drivers are requested.
+    """
     try:
         session = fastf1.get_session(year, round_num, "R")
         session.load(telemetry=True, weather=False)
     except Exception as e:
         raise F1DataError(f"Could not load race {year} round {round_num}: {e}") from e
 
-    driver_laps = session.laps.pick_drivers(driver_code)
-    if driver_laps.empty:
-        raise F1DataError(f"No laps found for driver '{driver_code}' in {year} round {round_num}.")
+    results = []
+    for code in driver_codes:
+        driver_laps = session.laps.pick_drivers(code)
+        if driver_laps.empty:
+            raise F1DataError(f"No laps found for driver '{code}' in {year} round {round_num}.")
 
-    fastest_lap = driver_laps.pick_fastest()
-    if fastest_lap is None or fastest_lap.empty:
-        raise F1DataError(f"No fastest lap found for driver '{driver_code}' in {year} round {round_num}.")
+        fastest_lap = driver_laps.pick_fastest()
+        if fastest_lap is None or fastest_lap.empty:
+            raise F1DataError(f"No fastest lap found for driver '{code}' in {year} round {round_num}.")
 
-    telemetry = fastest_lap.get_car_data().add_distance()
-
-    return {
-        "driver_code": driver_code,
-        "lap_time": str(fastest_lap["LapTime"]),
-        "event_name": session.event["EventName"],
-        "distance": telemetry["Distance"].tolist(),
-        "speed": telemetry["Speed"].tolist(),
-        "throttle": telemetry["Throttle"].tolist(),
-        "brake": telemetry["Brake"].tolist(),
-    }
+        telemetry = fastest_lap.get_car_data().add_distance()
+        results.append({
+            "driver_code": code,
+            "lap_time": str(fastest_lap["LapTime"]),
+            "event_name": session.event["EventName"],
+            "distance": telemetry["Distance"].tolist(),
+            "speed": telemetry["Speed"].tolist(),
+            "throttle": telemetry["Throttle"].tolist(),
+            "brake": telemetry["Brake"].tolist(),
+        })
+    return results
 
 
 def get_race_replay_data(year: int, round_num: int) -> dict:
@@ -197,9 +224,9 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
             code = info["Abbreviation"]
             team_color = info.get("TeamColor")
             colors[code] = f"#{team_color}" if team_color else "#FFFFFF"
-
             pos = session.pos_data[drv]
-        except Exception:
+        except Exception as e:
+            logger.warning("Skipping driver %s (no position data): %s", drv, e)
             continue
 
         if pos is None or pos.empty:
@@ -208,7 +235,6 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         times = pos["Time"].dt.total_seconds().tolist()
         xs = pos["X"].tolist()
         ys = pos["Y"].tolist()
-
         driver_tracks[code] = {"t": times, "x": xs, "y": ys}
         all_x.extend(xs)
         all_y.extend(ys)
@@ -234,7 +260,8 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
             outline_x = outline_pos["X"].tolist()
             outline_y = outline_pos["Y"].tolist()
             break
-        except Exception:
+        except Exception as e:
+            logger.warning("Skipping driver %s while building track outline: %s", drv, e)
             continue
 
     if not outline_x:
@@ -249,8 +276,9 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         for _, row in session.results.iterrows():
             code = row["Abbreviation"]
             gp = row.get("GridPosition")
-            grid_positions[code] = int(gp) if gp == gp else None
-    except Exception:
+            grid_positions[code] = None if _is_na(gp) else int(gp)
+    except Exception as e:
+        logger.warning("Could not build grid positions for %s round %s: %s", year, round_num, e)
         grid_positions = {}
 
     # Lap boundaries, keyed off 'Time' (session time when the lap was
@@ -261,7 +289,8 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         try:
             info = session.get_driver(drv)
             code = info["Abbreviation"]
-        except Exception:
+        except Exception as e:
+            logger.warning("Skipping driver %s while building lap info: %s", drv, e)
             continue
 
         laps = session.laps.pick_drivers(drv).sort_values("LapNumber")
@@ -269,13 +298,13 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         for _, lap in laps.iterrows():
             lap_num = lap.get("LapNumber")
             end_time = lap.get("Time")
-            if lap_num is None or pd.isna(lap_num) or end_time is None or pd.isna(end_time):
+            if _is_na(lap_num) or _is_na(end_time):
                 continue
             pos_val = lap.get("Position")
             entries.append({
                 "lap_number": int(lap_num),
                 "end_time": end_time.total_seconds(),
-                "position": int(pos_val) if pos_val == pos_val else None,
+                "position": None if _is_na(pos_val) else int(pos_val),
             })
         driver_laps_info[code] = entries
 
@@ -291,16 +320,19 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
                     "wind_speed": float(row["WindSpeed"]),
                     "rainfall": bool(row["Rainfall"]),
                 })
-    except Exception:
+    except Exception as e:
         # Weather data isn't always available for every session; the
         # replay can still run without it (weather panel just won't show).
+        logger.info("No weather data available for %s round %s: %s", year, round_num, e)
         weather = []
 
     total_laps = max(
         (e["lap_number"] for entries in driver_laps_info.values() for e in entries),
         default=0,
     )
-    max_time = max(max(t["t"]) for t in driver_tracks.values() if t["t"])
+
+    non_empty_times = [t["t"] for t in driver_tracks.values() if t["t"]]
+    max_time = max((max(t) for t in non_empty_times), default=0.0)
 
     return {
         "event_name": session.event["EventName"],
@@ -324,6 +356,7 @@ def compare_seasons(year1: int, year2: int) -> dict:
 
     for year in (year1, year2):
         season_info = {}
+
         try:
             season_info["driver_standings"] = get_driver_standings(year)
         except F1DataError as e:
@@ -344,7 +377,6 @@ def compare_seasons(year1: int, year2: int) -> dict:
 
         drivers = season_info["driver_standings"]
         constructors = season_info["constructor_standings"]
-
         season_info["summary"] = {
             "num_races": len(season_info["schedule"]),
             "champion_driver": drivers[0]["driver"] if drivers else "N/A",
@@ -353,7 +385,6 @@ def compare_seasons(year1: int, year2: int) -> dict:
             "champion_constructor_points": constructors[0]["points"] if constructors else None,
             "top_driver_wins": drivers[0]["wins"] if drivers else None,
         }
-
         data[year] = season_info
 
     return {

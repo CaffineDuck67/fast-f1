@@ -2,26 +2,31 @@
 main.py — F1 CLI entry point.
 
 Commands:
-    winners <year>                      List every race winner for a season
-    standings <year>                    Driver championship standings
-    constructors <year>                 Constructor championship standings
-    race <year> <round>                 Full results for a specific race
-    schedule <year>                     Full season calendar
-    compare <year1> <year2>             Side-by-side comparison of two seasons
-    visualize <year> <round> <drivers>  Plot fastest-lap speed comparison
-    replay <year> <round>               Animated race replay with leaderboard
+  winners <year>                    List every race winner for a season
+  standings <year>                  Driver championship standings
+  constructors <year>               Constructor championship standings
+  race <year> <round>               Full results for a specific race
+  schedule <year>                   Full season calendar
+  compare <year1> <year2>           Side-by-side comparison of two seasons
+  visualize <year> <round> <drivers>  Plot fastest-lap speed comparison
+  replay <year> <round>             Animated race replay with leaderboard
 
 Any of the above accept:
-    --csv <path>    export result as CSV
-    --json <path>   export result as JSON
+  --csv <path>   export result as CSV
+  --json <path>  export result as JSON
 
 Example:
-    python main.py standings 2023 --csv standings.csv
-    python main.py race 2023 5 --json race5.json
-    python main.py compare 2022 2023
+  python main.py standings 2023 --csv standings.csv
+  python main.py race 2023 5 --json race5.json
+  python main.py compare 2022 2023
+
+Cache location can be overridden with the F1_CACHE_DIR environment
+variable (defaults to ./f1_cache, created automatically if missing).
 """
 
 import argparse
+import logging
+import os
 import sys
 
 import fastf1
@@ -37,12 +42,20 @@ from f1_data import (
     get_driver_standings,
     get_constructor_standings,
     get_race_results,
-    get_driver_lap_telemetry,
+    get_multiple_drivers_lap_telemetry,
     get_race_replay_data,
     compare_seasons,
 )
 
-fastf1.Cache.enable_cache("f1_cache")
+logging.basicConfig(
+    level=os.environ.get("F1_LOG_LEVEL", "WARNING"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+CACHE_DIR = os.environ.get("F1_CACHE_DIR", "f1_cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+fastf1.Cache.enable_cache(CACHE_DIR)
 
 
 def _handle_export(data, args, label: str):
@@ -101,12 +114,10 @@ def cmd_compare(args):
 
 
 def cmd_visualize(args):
-    telemetry_list = []
-    for driver_code in args.drivers:
-        telemetry_list.append(
-            get_driver_lap_telemetry(args.year, args.round, driver_code.upper())
-        )
-
+    driver_codes = [d.upper() for d in args.drivers]
+    # Loads the session once and pulls every driver's fastest lap from
+    # it, instead of reloading the full session once per driver.
+    telemetry_list = get_multiple_drivers_lap_telemetry(args.year, args.round, driver_codes)
     event_name = telemetry_list[0]["event_name"]
 
     try:
@@ -124,9 +135,13 @@ def cmd_visualize(args):
 
 
 def cmd_replay(args):
-    display.console.print(f"[dim]Loading position data for {args.year} round {args.round}... this can take a minute.[/dim]")
+    display.console.print(
+        f"[dim]Loading position data for {args.year} round {args.round}... this can take a minute.[/dim]"
+    )
     data = get_race_replay_data(args.year, args.round)
-    display.print_success(f"Loaded {data['event_name']} — launching replay window (close it or press ESC to exit)")
+    display.print_success(
+        f"Loaded {data['event_name']} — launching replay window (close it or press ESC to exit)"
+    )
     replay.run_replay(data, initial_speed=args.speed)
 
 
@@ -203,16 +218,16 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
-
     try:
         args.func(args)
     except F1DataError as e:
         display.print_error(str(e))
         sys.exit(1)
     except Exception as e:
+        logger.exception("Unexpected error while running command")
         display.print_error(f"Unexpected error: {e}")
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    main() 
