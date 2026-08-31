@@ -121,14 +121,22 @@ def cmd_visualize(args):
     event_name = telemetry_list[0]["event_name"]
 
     try:
-        visualize.plot_speed_comparison(
-            args.year, args.round, event_name, telemetry_list, args.output
-        )
+        if args.full:
+            visualize.plot_telemetry_comparison(
+                args.year, args.round, event_name, telemetry_list, args.output,
+                show_delta=not args.no_delta,
+            )
+            plot_label = "telemetry"
+        else:
+            visualize.plot_speed_comparison(
+                args.year, args.round, event_name, telemetry_list, args.output
+            )
+            plot_label = "speed comparison"
     except visualize.VisualizeError as e:
         display.print_error(str(e))
         return
 
-    display.print_success(f"Saved speed comparison plot to '{args.output}'")
+    display.print_success(f"Saved {plot_label} plot to '{args.output}'")
     for tel in telemetry_list:
         console_line = f"  {tel['driver_code']}: fastest lap {tel['lap_time']}"
         display.console.print(console_line)
@@ -198,6 +206,15 @@ def build_parser():
     p_visualize.add_argument(
         "--output", "-o", default="speed_comparison.png", metavar="PATH",
         help="Output image path (default: speed_comparison.png)",
+    )
+    p_visualize.add_argument(
+        "--full", action="store_true",
+        help="Plot full telemetry (speed, throttle, brake, and a gap-over-distance panel) "
+             "instead of just speed",
+    )
+    p_visualize.add_argument(
+        "--no-delta", action="store_true",
+        help="With --full, omit the gap/delta-time panel",
     )
     p_visualize.set_defaults(func=cmd_visualize)
 
