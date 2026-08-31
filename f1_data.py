@@ -195,6 +195,10 @@ def get_multiple_drivers_lap_telemetry(
             "speed": telemetry["Speed"].tolist(),
             "throttle": telemetry["Throttle"].tolist(),
             "brake": telemetry["Brake"].tolist(),
+            # Elapsed time (seconds) at each sample, relative to the
+            # start of this lap — used by visualize.py to compute a
+            # gap/delta trace between drivers over distance.
+            "time": telemetry["Time"].dt.total_seconds().tolist(),
         })
     return results
 
