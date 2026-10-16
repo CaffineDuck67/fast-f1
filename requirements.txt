@@ -1,5 +1,22 @@
-fastf1
-rich
-matplotlib
-pygame
-streamlit
+# Core runtime + default app surfaces (CLI, dashboard, API).
+# Optional extras live in pyproject.toml:
+#   replay -> pygame, ml -> scikit-learn, dev -> pytest/ruff/httpx
+# Install everything for normal use with:  pip install -r requirements.txt
+
+# Data layer
+fastf1~=3.8
+pandas~=2.3
+numpy~=2.3
+
+# CLI presentation + plotting
+rich~=14.2
+matplotlib~=3.10
+
+# Streamlit dashboard
+streamlit~=1.51
+plotly~=6.3
+
+# FastAPI analytics API
+fastapi~=0.120
+uvicorn~=0.38
+pydantic~=2.12

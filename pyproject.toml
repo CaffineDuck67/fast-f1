@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fast-f1"
+version = "0.1.0"
+description = "Formula 1 analytics CLI, dashboard, and REST API built on FastF1 + Ergast"
+readme = "readme.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "CaffineDuck67" }]
+keywords = ["formula-1", "fastf1", "ergast", "analytics", "cli", "streamlit", "fastapi"]
+
+# Direct runtime dependencies used by the core data/CLI layer.
+dependencies = [
+    "fastf1~=3.8",
+    "pandas~=2.3",
+    "numpy~=2.3",
+    "rich~=14.2",
+    "matplotlib~=3.10",
+]
+
+[project.optional-dependencies]
+# Streamlit dashboard.
+dashboard = ["streamlit~=1.51", "plotly~=6.3"]
+# FastAPI analytics API.
+api = ["fastapi~=0.120", "uvicorn~=0.38", "pydantic~=2.12"]
+# Optional pygame-based race replay (may lack wheels on very new Pythons).
+replay = ["pygame"]
+# predict_gp.py machine-learning experiment.
+ml = ["scikit-learn~=1.7"]
+# Development / tooling (tests, linting, and API test client).
+dev = [
+    "pytest~=9.0",
+    "pytest-mock",
+    "ruff~=0.17",
+    "httpx",
+    "fastapi~=0.120",
+    "uvicorn~=0.38",
+]
+
+[tool.setuptools]
+# Flat-module layout: the importable top-level modules and the api/ package.
+py-modules = ["main", "config", "f1_data", "display", "export", "visualize", "replay", "streamlit_app", "predict_gp"]
+packages = ["api", "services"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# A pragmatic rule set: errors + common correctness/style warnings without
+# flagging the whole existing codebase for stylistic churn.
+select = ["E", "F", "W", "I", "B", "C4", "UP", "RUF"]
+ignore = [
+    "E501",   # line length handled by formatter; keep long f-strings working
+    "B008",   # function call in default arg (FastAPI Depends idiom)
+    "UP035",  # deprecated typing import rewrites are noisy for this codebase
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

@@ -27,26 +27,27 @@ needs normal internet access and will take a few minutes for a few
 seasons of data. Subsequent runs reuse the local cache and are fast.
 """
 
+import os
 import warnings
+
+import fastf1
 import numpy as np
 import pandas as pd
-import fastf1
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.model_selection import GroupKFold
 from sklearn.metrics import log_loss
+from sklearn.model_selection import GroupKFold
 
 warnings.filterwarnings("ignore")
 
 # ============================== CONFIG ===================================
-CACHE_DIR = "./f1_cache"          # FastF1 cache folder (created if missing)
-TRAIN_SEASONS = [2023, 2024, 2025, 2026]   # seasons to train on
+CACHE_DIR = "./f1_cache"  # FastF1 cache folder (created if missing)
+TRAIN_SEASONS = [2023, 2024, 2025, 2026]  # seasons to train on
 TARGET_YEAR = 2026
-TARGET_GP = "Netherlands"         # FastF1 event name / location, e.g. "Netherlands", "Monza"
-QUALI_DONE = False                # True once qualifying results exist for TARGET_GP
-FORM_WINDOW = 5                   # races of rolling form to use
+TARGET_GP = "Netherlands"  # FastF1 event name / location, e.g. "Netherlands", "Monza"
+QUALI_DONE = False  # True once qualifying results exist for TARGET_GP
+FORM_WINDOW = 5  # races of rolling form to use
 # ===========================================================================
 
-import os
 os.makedirs(CACHE_DIR, exist_ok=True)
 fastf1.Cache.enable_cache(CACHE_DIR)
 
@@ -76,7 +77,9 @@ def load_race_and_quali(year, round_number):
     res["Round"] = round_number
 
     if quali.results is not None and len(quali.results) > 0:
-        q = quali.results[["Abbreviation", "Position"]].rename(columns={"Position": "QualiPosition"})
+        q = quali.results[["Abbreviation", "Position"]].rename(
+            columns={"Position": "QualiPosition"}
+        )
         res = res.merge(q, on="Abbreviation", how="left")
     else:
         res["QualiPosition"] = res["GridPosition"]
@@ -113,7 +116,7 @@ def engineer_features(df, form_window=FORM_WINDOW):
     df["DriverAvgPoints"] = np.nan
     df["TeamAvgPoints"] = np.nan
 
-    for driver, grp in df.groupby("Abbreviation"):
+    for _driver, grp in df.groupby("Abbreviation"):
         grp = grp.sort_values(["Year", "Round"])
         df.loc[grp.index, "DriverAvgFinish"] = (
             grp["Position"].shift(1).rolling(form_window, min_periods=1).mean()
@@ -122,7 +125,7 @@ def engineer_features(df, form_window=FORM_WINDOW):
             grp["Points"].shift(1).rolling(form_window, min_periods=1).mean()
         )
 
-    for team, grp in df.groupby("TeamName"):
+    for _team, grp in df.groupby("TeamName"):
         grp = grp.sort_values(["Year", "Round"])
         df.loc[grp.index, "TeamAvgPoints"] = (
             grp["Points"].shift(1).rolling(form_window, min_periods=1).mean()
@@ -139,7 +142,7 @@ FEATURES = ["GridPosition", "QualiPosition", "DriverAvgFinish", "DriverAvgPoints
 
 def train_models(df):
     """Train separate calibrated classifiers for win and podium probability."""
-    data = df.dropna(subset=FEATURES + ["Podium", "Win"]).copy()
+    data = df.dropna(subset=[*FEATURES, "Podium", "Win"]).copy()
     X = data[FEATURES]
     groups = data["Year"] * 100 + data["Round"]  # keep whole races together in CV
 
@@ -162,7 +165,9 @@ def train_models(df):
 def build_next_gp_frame(df, year, gp_name, quali_done):
     """Assemble the feature rows for the upcoming race's entry list."""
     latest = df.sort_values(["Year", "Round"]).groupby("Abbreviation").tail(1)
-    entry = latest[["Abbreviation", "TeamName", "DriverAvgFinish", "DriverAvgPoints", "TeamAvgPoints"]].copy()
+    entry = latest[
+        ["Abbreviation", "TeamName", "DriverAvgFinish", "DriverAvgPoints", "TeamAvgPoints"]
+    ].copy()
 
     if quali_done:
         events = get_season_events(year)
@@ -172,13 +177,17 @@ def build_next_gp_frame(df, year, gp_name, quali_done):
         round_number = int(match.iloc[0]["RoundNumber"])
         quali = fastf1.get_session(year, round_number, "Q")
         quali.load(laps=False, telemetry=False, weather=False, messages=False)
-        q = quali.results[["Abbreviation", "Position"]].rename(columns={"Position": "QualiPosition"})
+        q = quali.results[["Abbreviation", "Position"]].rename(
+            columns={"Position": "QualiPosition"}
+        )
         entry = entry.merge(q, on="Abbreviation", how="inner")
         entry["GridPosition"] = entry["QualiPosition"]
     else:
         # No quali yet: approximate grid with each driver's average grid this season
         avg_grid = df[df["Year"] == year].groupby("Abbreviation")["GridPosition"].mean()
-        entry["GridPosition"] = entry["Abbreviation"].map(avg_grid).fillna(df["GridPosition"].median())
+        entry["GridPosition"] = (
+            entry["Abbreviation"].map(avg_grid).fillna(df["GridPosition"].median())
+        )
         entry["QualiPosition"] = entry["GridPosition"]
         print("QUALI_DONE=False -> using season-average grid position as a placeholder for grid.")
 
@@ -216,5 +225,4 @@ def predict_next_gp():
 
 
 if __name__ == "__main__":
-
     predict_next_gp()
