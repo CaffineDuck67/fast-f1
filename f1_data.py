@@ -17,9 +17,44 @@ logger = logging.getLogger(__name__)
 
 _ergast = Ergast()
 
+# FastF1/Ergast cover official championships from 1950 onward; a small
+# forward window is allowed so an upcoming season's schedule can be read.
+_MIN_YEAR = 1950
+_MAX_YEAR = 2100
+
 
 class F1DataError(Exception):
-    """Raised when requested F1 data can't be retrieved or doesn't exist."""
+    """Base error for requested F1 data that can't be retrieved/used."""
+
+
+class InvalidQueryError(F1DataError):
+    """Input (year/round/driver) is invalid — a caller mistake, not I/O."""
+
+
+class DataSourceError(F1DataError):
+    """An upstream provider (FastF1/Ergast/network) call failed."""
+
+
+class DataUnavailableError(F1DataError):
+    """The request was valid but the data is missing, empty, or absent."""
+
+
+def _validate_year(year: int) -> int:
+    """Ensure ``year`` is a plausible season number before any I/O."""
+    if not isinstance(year, int) or isinstance(year, bool):
+        raise InvalidQueryError(f"Year must be an integer, got {year!r}.")
+    if year < _MIN_YEAR or year > _MAX_YEAR:
+        raise InvalidQueryError(f"Year {year} is out of range (expected {_MIN_YEAR}-{_MAX_YEAR}).")
+    return year
+
+
+def _validate_round(round_num: int) -> int:
+    """Ensure ``round_num`` is a positive race round before any I/O."""
+    if not isinstance(round_num, int) or isinstance(round_num, bool):
+        raise InvalidQueryError(f"Round must be an integer, got {round_num!r}.")
+    if round_num < 1:
+        raise InvalidQueryError(f"Round must be 1 or greater, got {round_num}.")
+    return round_num
 
 
 def _is_na(value) -> bool:
@@ -27,31 +62,47 @@ def _is_na(value) -> bool:
     return value is None or pd.isna(value)
 
 
+def _num_or_none(value, cast=float):
+    """Cast a possibly-missing numeric value, returning None instead of NaN."""
+    if _is_na(value):
+        return None
+    try:
+        result = cast(value)
+    except (TypeError, ValueError):
+        return None
+    return None if _is_na(result) else result
+
+
 def get_schedule(year: int) -> list[dict]:
     """Return the full race calendar for a season."""
+    year = _validate_year(year)
     try:
         schedule = fastf1.get_event_schedule(year, include_testing=False)
     except Exception as e:
-        raise F1DataError(f"Could not load schedule for {year}: {e}") from e
+        raise DataSourceError(f"Could not load schedule for {year}: {e}") from e
 
     if schedule.empty:
-        raise F1DataError(f"No schedule data available for {year}.")
+        raise DataUnavailableError(f"No schedule data available for {year}.")
 
-    return [
-        {
-            "round": int(row["RoundNumber"]),
-            "date": str(row["EventDate"].date()),
-            "event_name": row["EventName"],
-            "location": row["Location"],
-            "country": row["Country"],
-        }
-        for _, row in schedule.iterrows()
-    ]
+    events = []
+    for _, row in schedule.iterrows():
+        event_date = row["EventDate"]
+        date_str = "" if _is_na(event_date) else str(event_date.date())
+        events.append(
+            {
+                "round": int(row["RoundNumber"]),
+                "date": date_str,
+                "event_name": row["EventName"],
+                "location": row["Location"],
+                "country": row["Country"],
+            }
+        )
+    return events
 
 
 def get_race_winners(year: int) -> list[dict]:
     """Return the winner of every race in a season."""
-    schedule = get_schedule(year)
+    schedule = get_schedule(year)  # validates year
     winners = []
     for event in schedule:
         round_num = event["round"]
@@ -60,35 +111,43 @@ def get_race_winners(year: int) -> list[dict]:
             if not results:
                 raise F1DataError("no results")
             winner = results[0].iloc[0]
-            winners.append({
-                "round": round_num,
-                "event_name": event["event_name"],
-                "driver": f"{winner['givenName']} {winner['familyName']}",
-                "constructor": winner["constructorName"],
-            })
+            winners.append(
+                {
+                    "round": round_num,
+                    "event_name": event["event_name"],
+                    "driver": f"{winner['givenName']} {winner['familyName']}",
+                    "constructor": winner["constructorName"],
+                }
+            )
         except Exception as e:
             logger.warning(
                 "Could not fetch winner for %s round %s (%s): %s",
-                year, round_num, event["event_name"], e,
+                year,
+                round_num,
+                event["event_name"],
+                e,
             )
-            winners.append({
-                "round": round_num,
-                "event_name": event["event_name"],
-                "driver": None,
-                "constructor": None,
-            })
+            winners.append(
+                {
+                    "round": round_num,
+                    "event_name": event["event_name"],
+                    "driver": None,
+                    "constructor": None,
+                }
+            )
     return winners
 
 
 def get_driver_standings(year: int) -> list[dict]:
     """Return final (or current) driver championship standings for a season."""
+    year = _validate_year(year)
     try:
         standings = _ergast.get_driver_standings(season=year).content
     except Exception as e:
-        raise F1DataError(f"Could not load driver standings for {year}: {e}") from e
+        raise DataSourceError(f"Could not load driver standings for {year}: {e}") from e
 
     if not standings:
-        raise F1DataError(f"No driver standings available for {year}.")
+        raise DataUnavailableError(f"No driver standings available for {year}.")
 
     df = standings[0]
     return [
@@ -105,13 +164,14 @@ def get_driver_standings(year: int) -> list[dict]:
 
 def get_constructor_standings(year: int) -> list[dict]:
     """Return final (or current) constructor championship standings for a season."""
+    year = _validate_year(year)
     try:
         standings = _ergast.get_constructor_standings(season=year).content
     except Exception as e:
-        raise F1DataError(f"Could not load constructor standings for {year}: {e}") from e
+        raise DataSourceError(f"Could not load constructor standings for {year}: {e}") from e
 
     if not standings:
-        raise F1DataError(f"No constructor standings available for {year}.")
+        raise DataUnavailableError(f"No constructor standings available for {year}.")
 
     df = standings[0]
     return [
@@ -127,26 +187,30 @@ def get_constructor_standings(year: int) -> list[dict]:
 
 def get_race_results(year: int, round_num: int) -> dict:
     """Return full results for a specific race, plus the event name."""
+    year = _validate_year(year)
+    round_num = _validate_round(round_num)
     try:
         session = fastf1.get_session(year, round_num, "R")
         session.load(telemetry=False, weather=False)
     except Exception as e:
-        raise F1DataError(f"Could not load race {year} round {round_num}: {e}") from e
+        raise DataSourceError(f"Could not load race {year} round {round_num}: {e}") from e
 
     if session.results is None or session.results.empty:
-        raise F1DataError(f"No results available for {year} round {round_num}.")
+        raise DataUnavailableError(f"No results available for {year} round {round_num}.")
 
     results = []
     for _, row in session.results.iterrows():
         pos = row["Position"]
-        results.append({
-            "position": None if _is_na(pos) else int(pos),
-            "driver_code": row["Abbreviation"],
-            "driver": row["FullName"],
-            "team": row["TeamName"],
-            "points": float(row["Points"]),
-            "status": row["Status"],
-        })
+        results.append(
+            {
+                "position": None if _is_na(pos) else int(pos),
+                "driver_code": row["Abbreviation"],
+                "driver": row["FullName"],
+                "team": row["TeamName"],
+                "points": _num_or_none(row["Points"], float),
+                "status": row["Status"],
+            }
+        )
 
     return {
         "event_name": session.event["EventName"],
@@ -170,36 +234,46 @@ def get_multiple_drivers_lap_telemetry(
     """Return fastest-lap telemetry for one or more drivers, loading the
     session only once regardless of how many drivers are requested.
     """
+    year = _validate_year(year)
+    round_num = _validate_round(round_num)
+    if not driver_codes:
+        raise InvalidQueryError("At least one driver code is required.")
     try:
         session = fastf1.get_session(year, round_num, "R")
         session.load(telemetry=True, weather=False)
     except Exception as e:
-        raise F1DataError(f"Could not load race {year} round {round_num}: {e}") from e
+        raise DataSourceError(f"Could not load race {year} round {round_num}: {e}") from e
 
     results = []
     for code in driver_codes:
         driver_laps = session.laps.pick_drivers(code)
         if driver_laps.empty:
-            raise F1DataError(f"No laps found for driver '{code}' in {year} round {round_num}.")
+            raise DataUnavailableError(
+                f"No laps found for driver '{code}' in {year} round {round_num}."
+            )
 
         fastest_lap = driver_laps.pick_fastest()
         if fastest_lap is None or fastest_lap.empty:
-            raise F1DataError(f"No fastest lap found for driver '{code}' in {year} round {round_num}.")
+            raise DataUnavailableError(
+                f"No fastest lap found for driver '{code}' in {year} round {round_num}."
+            )
 
         telemetry = fastest_lap.get_car_data().add_distance()
-        results.append({
-            "driver_code": code,
-            "lap_time": str(fastest_lap["LapTime"]),
-            "event_name": session.event["EventName"],
-            "distance": telemetry["Distance"].tolist(),
-            "speed": telemetry["Speed"].tolist(),
-            "throttle": telemetry["Throttle"].tolist(),
-            "brake": telemetry["Brake"].tolist(),
-            # Elapsed time (seconds) at each sample, relative to the
-            # start of this lap — used by visualize.py to compute a
-            # gap/delta trace between drivers over distance.
-            "time": telemetry["Time"].dt.total_seconds().tolist(),
-        })
+        results.append(
+            {
+                "driver_code": code,
+                "lap_time": str(fastest_lap["LapTime"]),
+                "event_name": session.event["EventName"],
+                "distance": telemetry["Distance"].tolist(),
+                "speed": telemetry["Speed"].tolist(),
+                "throttle": telemetry["Throttle"].tolist(),
+                "brake": telemetry["Brake"].tolist(),
+                # Elapsed time (seconds) at each sample, relative to the
+                # start of this lap — used by visualize.py to compute a
+                # gap/delta trace between drivers over distance.
+                "time": telemetry["Time"].dt.total_seconds().tolist(),
+            }
+        )
     return results
 
 
@@ -209,14 +283,16 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
     per-driver position traces over time, lap/position history for a
     leaderboard, and weather samples over the race.
     """
+    year = _validate_year(year)
+    round_num = _validate_round(round_num)
     try:
         session = fastf1.get_session(year, round_num, "R")
         session.load(telemetry=True, weather=True)
     except Exception as e:
-        raise F1DataError(f"Could not load race {year} round {round_num}: {e}") from e
+        raise DataSourceError(f"Could not load race {year} round {round_num}: {e}") from e
 
     if not session.drivers:
-        raise F1DataError(f"No driver data available for {year} round {round_num}.")
+        raise DataUnavailableError(f"No driver data available for {year} round {round_num}.")
 
     driver_tracks = {}
     colors = {}
@@ -244,7 +320,7 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
         all_y.extend(ys)
 
     if not driver_tracks:
-        raise F1DataError(f"No position telemetry available for {year} round {round_num}.")
+        raise DataUnavailableError(f"No position telemetry available for {year} round {round_num}.")
 
     # Build a clean track outline from a single "normal" lap (no pit
     # entry/exit) rather than a driver's full-session trace, which
@@ -305,25 +381,29 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
             if _is_na(lap_num) or _is_na(end_time):
                 continue
             pos_val = lap.get("Position")
-            entries.append({
-                "lap_number": int(lap_num),
-                "end_time": end_time.total_seconds(),
-                "position": None if _is_na(pos_val) else int(pos_val),
-            })
+            entries.append(
+                {
+                    "lap_number": int(lap_num),
+                    "end_time": end_time.total_seconds(),
+                    "position": None if _is_na(pos_val) else int(pos_val),
+                }
+            )
         driver_laps_info[code] = entries
 
     weather = []
     try:
         if session.weather_data is not None and not session.weather_data.empty:
             for _, row in session.weather_data.iterrows():
-                weather.append({
-                    "t": row["Time"].total_seconds(),
-                    "track_temp": float(row["TrackTemp"]),
-                    "air_temp": float(row["AirTemp"]),
-                    "humidity": float(row["Humidity"]),
-                    "wind_speed": float(row["WindSpeed"]),
-                    "rainfall": bool(row["Rainfall"]),
-                })
+                weather.append(
+                    {
+                        "t": row["Time"].total_seconds(),
+                        "track_temp": float(row["TrackTemp"]),
+                        "air_temp": float(row["AirTemp"]),
+                        "humidity": float(row["Humidity"]),
+                        "wind_speed": float(row["WindSpeed"]),
+                        "rainfall": bool(row["Rainfall"]),
+                    }
+                )
     except Exception as e:
         # Weather data isn't always available for every session; the
         # replay can still run without it (weather panel just won't show).
@@ -355,6 +435,8 @@ def get_race_replay_data(year: int, round_num: int) -> dict:
 
 def compare_seasons(year1: int, year2: int) -> dict:
     """Build a side-by-side comparison of two seasons' key stats."""
+    _validate_year(year1)
+    _validate_year(year2)
     errors = {}
     data = {}
 

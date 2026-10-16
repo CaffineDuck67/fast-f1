@@ -11,7 +11,17 @@ f1_data.get_race_replay_data().
 
 import bisect
 
-import pygame
+# `pygame` is imported lazily (see `_ensure_pygame`) so that importing
+# this module — and therefore the whole CLI via main.py — works even on
+# environments where pygame can't be installed (e.g. Python versions
+# without prebuilt wheels). The replay feature degrades gracefully with
+# a clear message instead of crashing unrelated commands at import time.
+pygame = None
+
+
+class ReplayError(Exception):
+    """Raised when a replay can't be initialized or run."""
+
 
 WIDTH, HEIGHT = 1200, 720
 TRACK_MARGIN = 90
@@ -115,6 +125,7 @@ class RaceReplay:
     # ---- main loop ----
 
     def run(self):
+        _ensure_pygame()
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption(f"{self.data['event_name']} — Race Replay")
@@ -177,7 +188,7 @@ class RaceReplay:
         outline = self.data.get("track_outline")
         if not outline or not outline.get("x"):
             return
-        points = [self._project(x, y) for x, y in zip(outline["x"], outline["y"])]
+        points = [self._project(x, y) for x, y in zip(outline["x"], outline["y"], strict=False)]
         if len(points) > 1:
             pygame.draw.lines(self.screen, TRACK_COLOR, False, points, 4)
 
@@ -202,7 +213,8 @@ class RaceReplay:
         time_text = self.small_font.render(
             f"Race Time: {_format_time(self.current_time)} (x{self.speed:g})"
             + ("  [PAUSED]" if self.paused else ""),
-            True, DIM_TEXT_COLOR,
+            True,
+            DIM_TEXT_COLOR,
         )
         self.screen.blit(time_text, (x, y))
 
@@ -233,7 +245,7 @@ class RaceReplay:
         self.screen.blit(title, (panel_x, y))
         y += 30
 
-        for pos, code, lap_num in standings:
+        for pos, code, _lap_num in standings:
             color = _hex_to_rgb(self.data["colors"].get(code, "#FFFFFF"))
             pos_str = str(pos) if pos != 99 else "-"
             line = self.small_font.render(f"{pos_str}. {code}", True, color)
@@ -259,7 +271,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     hex_color = hex_color.lstrip("#")
     if len(hex_color) != 6:
         return (255, 255, 255)
-    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
 
 
 def _format_time(t: float) -> str:
@@ -268,6 +280,26 @@ def _format_time(t: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _ensure_pygame():
+    """Import pygame on demand, raising a clear error if unavailable."""
+    global pygame
+    if pygame is None:
+        try:
+            import pygame as _pygame
+        except ImportError as e:
+            raise ReplayError(
+                "The replay feature needs 'pygame', which isn't installed. "
+                "Install it with `pip install pygame` (note: pygame may not "
+                "have prebuilt packages for very new Python versions)."
+            ) from e
+        pygame = _pygame
+
+
 def run_replay(data: dict, initial_speed: float = 1.0):
     """Launch the interactive replay window. Blocks until the window is closed."""
+    if not data or not data.get("driver_tracks"):
+        raise ReplayError("No replay data available to display.")
+    if initial_speed is None or initial_speed <= 0:
+        raise ReplayError(f"Invalid playback speed: {initial_speed!r}")
+    _ensure_pygame()
     RaceReplay(data, initial_speed).run()
