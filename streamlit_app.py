@@ -11,14 +11,11 @@ Cache directory and log level are configurable the same way as the
 CLI: F1_CACHE_DIR and F1_LOG_LEVEL environment variables.
 """
 
-import logging
-import os
-
-import fastf1
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+import config
 from f1_data import (
     F1DataError,
     compare_seasons,
@@ -30,11 +27,9 @@ from f1_data import (
     get_schedule,
 )
 
-logging.basicConfig(level=os.environ.get("F1_LOG_LEVEL", "WARNING"))
-
-CACHE_DIR = os.environ.get("F1_CACHE_DIR", "f1_cache")
-os.makedirs(CACHE_DIR, exist_ok=True)
-fastf1.Cache.enable_cache(CACHE_DIR)
+# Configure logging and enable FastF1's on-disk cache (honors
+# F1_CACHE_DIR / F1_LOG_LEVEL), sharing setup with the CLI.
+CACHE_DIR = config.setup()
 
 st.set_page_config(page_title="F1 Season Dashboard", page_icon="🏎️", layout="wide")
 
@@ -47,6 +42,7 @@ YEAR_OPTIONS = list(range(CURRENT_YEAR, 1949, -1))
 # every interaction, so these stop that from re-hitting FastF1/Ergast each
 # time a widget changes. FastF1's own on-disk cache still backs all of this.
 # ---------------------------------------------------------------------------
+
 
 @st.cache_data(ttl="1h", show_spinner=False)
 def cached_schedule(year: int):
@@ -91,38 +87,49 @@ def show_error(e: F1DataError):
 # Pages
 # ---------------------------------------------------------------------------
 
+
 def page_standings(year: int):
     st.subheader(f"Driver Standings — {year}")
     try:
-        drivers = cached_driver_standings(year)
+        with st.spinner(f"Loading {year} driver standings..."):
+            drivers = cached_driver_standings(year)
     except F1DataError as e:
         show_error(e)
         return
+    if not drivers:
+        st.info("No driver standings available for this season yet.")
+        return
     df = pd.DataFrame(drivers)
     st.dataframe(df, use_container_width=True, hide_index=True)
-    if not df.empty:
-        st.bar_chart(df.set_index("driver")["points"])
+    st.bar_chart(df.set_index("driver")["points"])
 
 
 def page_constructors(year: int):
     st.subheader(f"Constructor Standings — {year}")
     try:
-        constructors = cached_constructor_standings(year)
+        with st.spinner(f"Loading {year} constructor standings..."):
+            constructors = cached_constructor_standings(year)
     except F1DataError as e:
         show_error(e)
         return
+    if not constructors:
+        st.info("No constructor standings available for this season yet.")
+        return
     df = pd.DataFrame(constructors)
     st.dataframe(df, use_container_width=True, hide_index=True)
-    if not df.empty:
-        st.bar_chart(df.set_index("constructor")["points"])
+    st.bar_chart(df.set_index("constructor")["points"])
 
 
 def page_winners(year: int):
     st.subheader(f"Race Winners — {year}")
     try:
-        winners = cached_race_winners(year)
+        with st.spinner(f"Loading {year} race winners..."):
+            winners = cached_race_winners(year)
     except F1DataError as e:
         show_error(e)
+        return
+    if not winners:
+        st.info("No race winners available for this season yet.")
         return
     st.dataframe(pd.DataFrame(winners), use_container_width=True, hide_index=True)
 
@@ -130,9 +137,13 @@ def page_winners(year: int):
 def page_schedule(year: int):
     st.subheader(f"Season Schedule — {year}")
     try:
-        schedule = cached_schedule(year)
+        with st.spinner(f"Loading {year} schedule..."):
+            schedule = cached_schedule(year)
     except F1DataError as e:
         show_error(e)
+        return
+    if not schedule:
+        st.info("No schedule available for this season yet.")
         return
     st.dataframe(pd.DataFrame(schedule), use_container_width=True, hide_index=True)
 
@@ -201,7 +212,8 @@ def page_telemetry(year: int):
         round_num = round_labels[label]
     with col2:
         drivers_input = st.text_input(
-            "Driver codes (space-separated)", value="VER LEC HAM",
+            "Driver codes (space-separated)",
+            value="VER LEC HAM",
             help="Three-letter FIA driver codes, e.g. VER LEC HAM NOR",
         )
 
@@ -220,16 +232,23 @@ def page_telemetry(year: int):
 
         frames = []
         for tel in telemetry_list:
-            frames.append(pd.DataFrame({
-                "distance": tel["distance"],
-                "speed": tel["speed"],
-                "driver": tel["driver_code"],
-            }))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "distance": tel["distance"],
+                        "speed": tel["speed"],
+                        "driver": tel["driver_code"],
+                    }
+                )
+            )
             st.caption(f"{tel['driver_code']}: fastest lap {tel['lap_time']}")
 
         combined = pd.concat(frames, ignore_index=True)
         fig = px.line(
-            combined, x="distance", y="speed", color="driver",
+            combined,
+            x="distance",
+            y="speed",
+            color="driver",
             labels={"distance": "Distance (m)", "speed": "Speed (km/h)"},
             title=telemetry_list[0]["event_name"],
         )
@@ -239,6 +258,7 @@ def page_telemetry(year: int):
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
+
 
 def main():
     st.title("🏎️ F1 Season Dashboard")

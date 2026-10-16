@@ -1,8 +1,6 @@
-
-
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 console = Console()
@@ -118,11 +116,13 @@ def print_race_results(year: int, round_num: int, event_name: str, results: list
         pos_str = str(pos) if pos is not None else "DNF"
         style = _position_style(pos) if pos else ("bold red" if "DNF" in pos_str else "")
         status_style = "green" if row["status"] == "Finished" else "red"
+        points = row["points"]
+        points_str = f"{points:g}" if points is not None else "—"
         table.add_row(
             pos_str,
             f"{row['driver']} ({row['driver_code']})",
             row["team"],
-            f"{row['points']:g}",
+            points_str,
             f"[{status_style}]{row['status']}[/{status_style}]",
             style=style,
         )
@@ -157,7 +157,12 @@ def print_comparison(comparison: dict):
             return f"[red]{d:g}[/red]"
         return "0"
 
-    table.add_row("Races held", str(s1["num_races"]), str(s2["num_races"]), diff_str(s1["num_races"], s2["num_races"]))
+    table.add_row(
+        "Races held",
+        str(s1["num_races"]),
+        str(s2["num_races"]),
+        diff_str(s1["num_races"], s2["num_races"]),
+    )
     table.add_row("Champion (driver)", s1["champion_driver"], s2["champion_driver"], "")
     table.add_row(
         "Champion points",
@@ -165,11 +170,17 @@ def print_comparison(comparison: dict):
         f"{s2['champion_driver_points']:g}" if s2["champion_driver_points"] is not None else "N/A",
         diff_str(s1["champion_driver_points"], s2["champion_driver_points"]),
     )
-    table.add_row("Champion (constructor)", s1["champion_constructor"], s2["champion_constructor"], "")
+    table.add_row(
+        "Champion (constructor)", s1["champion_constructor"], s2["champion_constructor"], ""
+    )
     table.add_row(
         "Constructor points",
-        f"{s1['champion_constructor_points']:g}" if s1["champion_constructor_points"] is not None else "N/A",
-        f"{s2['champion_constructor_points']:g}" if s2["champion_constructor_points"] is not None else "N/A",
+        f"{s1['champion_constructor_points']:g}"
+        if s1["champion_constructor_points"] is not None
+        else "N/A",
+        f"{s2['champion_constructor_points']:g}"
+        if s2["champion_constructor_points"] is not None
+        else "N/A",
         diff_str(s1["champion_constructor_points"], s2["champion_constructor_points"]),
     )
     table.add_row(
