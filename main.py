@@ -26,36 +26,30 @@ variable (defaults to ./f1_cache, created automatically if missing).
 
 import argparse
 import logging
-import os
 import sys
 
-import fastf1
-
+import config
 import display
 import export
-import visualize
 import replay
+import visualize
 from f1_data import (
     F1DataError,
-    get_schedule,
-    get_race_winners,
-    get_driver_standings,
+    compare_seasons,
     get_constructor_standings,
-    get_race_results,
+    get_driver_standings,
     get_multiple_drivers_lap_telemetry,
     get_race_replay_data,
-    compare_seasons,
+    get_race_results,
+    get_race_winners,
+    get_schedule,
 )
 
-logging.basicConfig(
-    level=os.environ.get("F1_LOG_LEVEL", "WARNING"),
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.environ.get("F1_CACHE_DIR", "f1_cache")
-os.makedirs(CACHE_DIR, exist_ok=True)
-fastf1.Cache.enable_cache(CACHE_DIR)
+# Configure logging and enable FastF1's on-disk cache (honors
+# F1_CACHE_DIR / F1_LOG_LEVEL).
+CACHE_DIR = config.setup()
 
 
 def _handle_export(data, args, label: str):
@@ -123,7 +117,11 @@ def cmd_visualize(args):
     try:
         if args.full:
             visualize.plot_telemetry_comparison(
-                args.year, args.round, event_name, telemetry_list, args.output,
+                args.year,
+                args.round,
+                event_name,
+                telemetry_list,
+                args.output,
                 show_delta=not args.no_delta,
             )
             plot_label = "telemetry"
@@ -204,16 +202,21 @@ def build_parser():
     p_visualize.add_argument("round", type=int)
     p_visualize.add_argument("drivers", nargs="+", help="Driver codes, e.g. VER LEC HAM")
     p_visualize.add_argument(
-        "--output", "-o", default="speed_comparison.png", metavar="PATH",
+        "--output",
+        "-o",
+        default="speed_comparison.png",
+        metavar="PATH",
         help="Output image path (default: speed_comparison.png)",
     )
     p_visualize.add_argument(
-        "--full", action="store_true",
+        "--full",
+        action="store_true",
         help="Plot full telemetry (speed, throttle, brake, and a gap-over-distance panel) "
-             "instead of just speed",
+        "instead of just speed",
     )
     p_visualize.add_argument(
-        "--no-delta", action="store_true",
+        "--no-delta",
+        action="store_true",
         help="With --full, omit the gap/delta-time panel",
     )
     p_visualize.set_defaults(func=cmd_visualize)
@@ -224,7 +227,9 @@ def build_parser():
     p_replay.add_argument("year", type=int)
     p_replay.add_argument("round", type=int)
     p_replay.add_argument(
-        "--speed", type=float, default=1.0,
+        "--speed",
+        type=float,
+        default=1.0,
         help="Initial playback speed multiplier (default: 1.0)",
     )
     p_replay.set_defaults(func=cmd_replay)
@@ -240,6 +245,9 @@ def main():
     except F1DataError as e:
         display.print_error(str(e))
         sys.exit(1)
+    except replay.ReplayError as e:
+        display.print_error(str(e))
+        sys.exit(1)
     except Exception as e:
         logger.exception("Unexpected error while running command")
         display.print_error(f"Unexpected error: {e}")
@@ -247,4 +255,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() 
+    main()
